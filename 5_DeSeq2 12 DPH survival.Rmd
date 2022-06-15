@@ -1,0 +1,292 @@
+---
+title: "DeSeq2"
+---
+```{r}
+#libraries
+library(DESeq2) # BiocManager::install("DESeq2")
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+#to install microbiome need to install these first
+  #install.packages("adespatial")
+  #BiocManager::install("WGCNA")
+  #library(WGCNA)
+  #library(devtools)
+  #devtools::install_github("umerijaz/microbiomeSeq")
+library(microbiomeSeq)
+```
+
+```{r}
+# seed and pathways
+set.seed(0201)
+sessionInfo()
+filepath = "~/OneDrive - NTNU/Doktorgrad/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS"
+filepath_results =paste0( "~/OneDrive - NTNU/Doktorgrad/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS/results/", Sys.Date(), "_")
+filepath_figures = paste0("~/OneDrive - NTNU/Doktorgrad/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS/figures/" , Sys.Date(), "_")
+source(paste0(filepath, "/functions/plot.settings.R"))
+```
+
+```{r}
+#attach data set
+exp = readRDS(file = paste0(filepath,"/data/zOTUs/2022-01-11_zOTU_raw_dataset.rds") )
+#add survival data to metadata
+survival = readRDS(paste0(filepath, "/results/2022-01-14_survival.RDS"))
+survival = survival %>% select(tank_letter,survival ) 
+colnames(survival)[1] = "Tank"
+survival_df = phyloseq::sample_data(merge(data.frame(sample_data(exp) ), survival))
+rownames(survival_df) = survival_df$Sample
+sample_data(exp) = survival_df
+```
+
+```{r}
+physeq = exp
+tax_table(physeq) = cbind(tax_table(physeq), rownames(tax_table(physeq)))
+colnames(tax_table(physeq)) = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "OTUID")
+#want to compare low and high survival. Setting treshold at 10% survival
+sample_data(physeq)$sur_cat = case_when(sample_data(physeq)$survival > 10 ~ "moderate", 
+                                         sample_data(physeq)$survival < 10 ~ "low") 
+physeq = subset_samples(physeq = physeq, DPH == 12)
+```
+
+Following guide given in Statistical Analysis of Microbiome Data with R chapter 11.5 The DESeq and DESeq2 Packages
+https://doi.org/10.1007/978-981-13-1534-3
+
+Step 1: Create the Count Table
+```{r}
+# convert OTU table to matrix
+otu_tab = (otu_table(physeq))
+#DESeq2 need taxa(genes=rows) by samples(=columns)
+countData<-(as(otu_tab, "matrix"))
+#head(countData)
+```
+
+Step 2: Create the Sample Metadata Table
+We want moderate to be "control" level.
+```{r}
+#sample metadata
+meta = data.frame(sample_data(physeq))
+meta$sur_cat = factor(meta$sur_cat, levels = c("moderate", "low"))
+group = meta$sur_cat
+```
+
+Step 3: Build the DESeq2 Object
+```{r}
+# build the deseq object 
+metaData = data.frame(row.names=colnames(countData),group=group)
+dds = DESeqDataSetFromMatrix(countData = countData, colData = metaData, design = ~group)
+```
+
+Step 4: Filter the Data
+```{r}
+dds <- dds[rowSums(counts(dds)) > 0,] #double check all 0 count taxa are gone
+#normalise data with median ration method.
+```
+
+Step 5: Normalize the Count Data
+```{r}
+dds <- estimateSizeFactors(dds)
+#sizeFactors(dds)
+```
+
+Step 6: Estimate the Dispersion
+```{r}
+#estimate the dispersion 
+dds<- estimateDispersions(dds)
+```
+
+Step 7: Test the Differential Abundance
+```{r}
+deseq_restult = DESeq2::DESeq(object = dds, test = "Wald", fitType = "parametric" )
+#saveRDS(object = deseq_restult, file = paste0(filepath_results, "DeSeq_object_survival.RDS"))
+```
+
+```{r}
+res <- results(deseq_restult)
+```
+
+```{r}
+# how many OTUs were sig differentailly expressed (using FDR ajusted p-value)
+table(res[,"padj"] < 0.1) # the FDR corrected p-value have 192 below 0.1
+table(res[,"padj"] < 0.01) # 75  below 0.01
+table(res[,"padj"] < 0.05) # 137 below 0.05
+```
+
+Investigate the fold changes distribution along with the p-values through a volcanoplot. 
+```{r}
+df = as.data.frame(res) 
+df$taxa = rownames(df) 
+df1 = na.omit(df)
+df1 %>% ggplot2::ggplot(aes(x= log2FoldChange, y = -log10(padj))) + 
+  geom_point()
+```
+
+Create a dataframe with the significant OTUs
+```{r}
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(physeq)[rownames(sigtab), ], "matrix"))
+x = tapply(sigtab$log2FoldChange, sigtab$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Phylum = factor(as.character(sigtab$Phylum), levels=names(x))
+
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+sigtab2 = sigtab %>% mutate(classified = substr(Order, 1,1)) %>% 
+  mutate(Ordername =case_when(classified == "o" ~ substring(Order, 3), 
+                              classified != "o" ~ "x_unclassified at order level")) %>% 
+  mutate(classified2 = substr(Genus, 1,1)) %>% 
+  mutate(taxonname = case_when(classified2 == "g" ~ substring(Genus,1), 
+                              classified2 != "g" ~  substring(Genus, 6) )) %>%
+  mutate(lowest_class = substr(taxonname, 1,1)) %>%
+  mutate(group = 
+           case_when(classified2 == "g" ~  paste0(substring(taxonname,3)), 
+                     classified2 != "g" ~  paste0("uncl. (", substring(taxonname,1,1), " ", substring(taxonname,3), ")"))) %>%
+  mutate(classified_c = substr(Class, 1,1)) %>% 
+  mutate(classname =case_when(classified_c == "c" ~ substring(Class, 3), 
+                              classified_c != "c" ~ "x_unclassified at class level")) %>%
+  mutate(classified_f = substr(Family, 1,1)) %>% 
+  mutate(classname_f =case_when(classified_f == "f" ~ substring(Family, 3), 
+                              classified_f != "f" ~ "x_unclassified at family level"))
+saveRDS(object = sigtab2, file = paste0(filepath_results, "DeSeq_alpha0-05_survival_taxa_12DPH.RDS"))
+```
+
+```{r}
+sigtab2 = readRDS(file = paste0(filepath, "/results/2022-01-18_DeSeq_alpha0-05_survival_taxa_12DPH.RDS"))
+sigtab2 %>% 
+  ggplot2::ggplot(aes(x=log2FoldChange, y = Genus, fill = Order)) + 
+  geom_point(shape = 21, size = 2) + 
+  my.theme + 
+  geom_vline(xintercept = 0) + 
+  ylab("") + 
+  scale_fill_manual(values = col[2:21]) + 
+  theme(text = element_text(size = 12))
+
+ggsave(filename = paste0(filepath_figures, "deseq2_staende_order.svg"), 
+       width = 180, height = 150, units = "mm" ) 
+```
+
+# Taxa from DeSeq2 potting
+```{r}
+deseq2_taxa = readRDS(file = paste0(filepath, "/results/2022-01-18_DeSeq_alpha0-05_survival_taxa_12DPH.RDS"))
+my.physeq =readRDS(file = paste0(filepath,"/results/2022-01-11_zOTU_dataset_scaled_rarified.rds") )
+source(paste0(filepath, "/functions/plot.settings.R"))
+source(paste0(filepath, "/functions/min.mean.sd.max.R"))
+source(paste0(filepath, "/functions/summarize_taxa_functions.R"))
+tax_table(my.physeq) = cbind(tax_table(my.physeq), rownames(tax_table(my.physeq)))
+colnames(tax_table(my.physeq)) = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "OTUID")
+deseq2_taxa_linked = deseq2_taxa %>% mutate (linked_to = case_when(log2FoldChange > 0 ~ "low survival", 
+                                              log2FoldChange < 0 ~ "moderate survival")) %>% select(OTUID,linked_to )
+```
+
+```{r}
+new_meta = readRDS(file = paste0(filepath, "/results/2021-06-30_new_metadata.RDS") ) 
+sample_data(my.physeq) = new_meta
+sample_data(my.physeq)$sur_cat = case_when(sample_data(my.physeq)$survival > 10 ~ "moderate", 
+                                         sample_data(my.physeq)$survival < 10 ~ "low") 
+# for plotting purposes we want to work with compositional data (scale in percentage)
+my.physeq = microbiome::transform(x = my.physeq, transform = "compositional")
+
+tax_rank = "OTUID"
+min_percentage = 0
+minTotRelAbun = min_percentage/100
+nsamples_above = 0 
+
+df_keep_taxa = data.frame(summarize_taxa(physeq = my.physeq, Rank = tax_rank, GroupBy = "Sample"))
+df_keep_taxa = df_keep_taxa %>% group_by(df_keep_taxa[1]) %>% 
+  summarise(in_n_samples = n(), 
+            n_samples_above_min_ab = sum(totalA > minTotRelAbun ) ) %>%
+  filter(n_samples_above_min_ab >= nsamples_above )
+
+taxa_summary = data.frame(summarize_taxa(my.physeq, tax_rank, GroupBy = c("Sample")))
+taxa_summary_df = merge(taxa_summary, data.frame(sample_data(my.physeq)), by = "Sample")
+taxa_summary_df_filtered = taxa_summary_df %>% filter(OTUID %in% deseq2_taxa$OTUID ) 
+```
+```{r}
+taxa_plotting = deseq2_taxa %>% select(Phylum, Class, Order, Family, Genus, OTUID, group, classname, classname_f)
+taxa_summary_df_filtered.1 = merge(taxa_summary_df_filtered,taxa_plotting)
+taxa_summary_link = merge(taxa_summary_df_filtered.1 , deseq2_taxa_linked) 
+
+taxa_summary_link.1 = taxa_summary_link %>% select(OTUID, Sample, totalA, Tank, DPH, Overall_system, Start_system, Class, Order, Family, Genus, classname_f,linked_to, sur_cat)
+
+combinations =  taxa_summary_link.1  %>% expand(
+  nesting(OTUID,Class, Order, Family, Genus, classname_f, linked_to),  
+  nesting(Sample, Tank, DPH, Overall_system, Start_system,sur_cat) )  
+
+gaps_filled = taxa_summary_link.1 %>% dplyr::right_join(combinations) %>% 
+  mutate(rep = paste0(Overall_system, "  " ,Tank))
+```
+
+```{r}
+taxa_summary_link_df = 
+  gaps_filled %>%
+  
+  na.omit() %>% 
+  group_by(Sample, Overall_system, linked_to, Start_system, Order, rep, DPH) %>% 
+  summarise(tot_a = sum(totalA)) %>%
+  mutate(link_label = paste0("Linked to ", linked_to) ) 
+
+total_per_sample = taxa_summary_link_df %>% group_by(rep, DPH, Overall_system) %>% summarise(tot_a = sum(tot_a)) 
+total_per_sample$Order = "x_Total abundance"
+total_per_sample$link_label = "Total abundance"
+
+
+total_per_sample_df = bind_rows(taxa_summary_link_df, total_per_sample)
+```
+
+```{r}
+total_per_sample_df %>%  
+  ggplot2::ggplot(aes(y=rep, x = tot_a)) +
+  
+  ggh4x::facet_nested(DPH  + Overall_system ~link_label ,switch = "y", 
+             space = "free_y", 
+             scales = "free_y") + ylab("") + 
+  geom_bar(stat = "identity", aes(fill = Order), color = "black" ) + 
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1, suffix = "")) + 
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),  
+        strip.text.y.left = element_text(angle = 0), 
+        panel.spacing.x   = unit(0.2, "lines"),
+        text = element_text(size = 8), 
+  panel.spacing.y   = unit(0, "lines")) + 
+  my.theme + 
+  scale_fill_manual(values = c(col[2:17], "grey90") ) + 
+  xlab("Abundance [%]") + coord_cartesian(expand = F)
+```
+
+
+```{r}
+ggsave(filename = paste0(filepath_figures, "deseq2_abundance_each_sample_composition_w-total.svg"), 
+       width = 180, height = 130, units = "mm" )
+```
+
+
+
+Number of ASVs linked to low and moderate survival 
+```{r}
+deseq2_taxa_linked %>% group_by(linked_to) %>% summarise(n = n())
+```
+
+# g_Moritella
+```{r}
+mortinella = gaps_filled %>%   mutate(link_label = paste0("Linked to ", linked_to) ) %>%
+    filter(Genus == "g_Moritella") %>% na.omit() %>% 
+  group_by(OTUID) %>% summarise(n=n())
+
+exp_nor = readRDS(file = paste0(filepath,"/results/2022-01-11_zOTU_dataset_scaled_rarified.rds") )
+
+exp_g_Moritella = subset_taxa(exp_nor, Genus == "g_Moritella")
+
+View(exp_g_Moritella@otu_table)
+plot_bar(exp_g_Moritella, fill = "Genus") + facet_grid(~Overall_system+DPH, space = "free", scales = "free")
+```
+
+#Arcobacter
+```{r}
+gaps_filled %>%   mutate(link_label = paste0("Linked to ", linked_to) ) %>%
+    filter(Genus == "g_Moritella") %>% na.omit() %>% 
+  group_by(OTUID) %>% summarise(n=n())
+```
+
+

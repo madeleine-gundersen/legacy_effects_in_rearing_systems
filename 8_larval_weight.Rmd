@@ -1,0 +1,175 @@
+---
+title: "Data import dryweight"
+---
+```{r}
+#libraries
+library(dplyr)
+library(ggplot2)
+library(readxl)
+```
+
+```{r}
+# seed and pathways
+set.seed(0201)
+sessionInfo()
+filepath = "/R_Analysis_MMS-FTS/"
+filepath_results = paste0("/R_Analysis_MMS-FTS/results/", Sys.Date(), "_")
+filepath_figures = paste0("~/R_Analysis_MMS-FTS/figures/",  Sys.Date(), "_")
+source(paste0(filepath, "/functions/plot.settings.R"))
+source(paste0(filepath, "/functions/min.mean.sd.max.R"))
+```
+
+# Carbon content pooled
+```{r}
+larva_c = readxl::read_excel(paste0(filepath, "data/2021-06-28_All_results.xlsx"), 
+                             sheet = "larva_C_weight")
+#Dry weight is in milligrams
+larva_c = larva_c %>% dplyr::select(DPH, DW_per_larva,cc, 
+                          System_start, System_sampling, 
+                          Overall_system,  n_larva, 
+                          SampleID, tank_number) %>%
+  mutate(DW_per_larva = as.numeric(DW_per_larva)) 
+
+# samples taken at 2 DPH is start for all systems. Need to add metadata to these values and attach for each system
+larva_c_2dph = larva_c %>% filter(DPH == 2) 
+larva_c_rest = larva_c %>% filter(DPH != 2) %>% 
+  mutate(Overall_system = case_when(DPH < 9 ~  System_start, 
+                                    T ~ Overall_system))
+systems = rep(unique(larva_c_rest$System_start), times = 10)
+larva_c_2dph.s= larva_c_2dph %>% 
+  dplyr::slice(rep(1:n(), each = 4)) %>% #copies the df 8 times
+  mutate(Overall_system = systems) # for each value attach metadata for each tank
+larva_c_both = dplyr::bind_rows(larva_c_2dph.s, larva_c_rest)
+
+larva_c_both = larva_c_both %>% na.omit(larva_c_both) #remove two entries that are missing data. both on 7DPH, one from tank T1 (MMS-), one from T12 (FTS-)
+larva_c_both = larva_c_both %>% mutate(mikrogram_DW = DW_per_larva*1000, 
+                                       method = "Multiple") 
+```
+#Weight individual
+```{r}
+tank_groups = readxl::read_excel(paste0(filepath, "data/2021-06-28_All_results.xlsx"), 
+                             sheet = "tank_selection")
+tank_groups = tank_groups %>% mutate(System_start = substr(Overall_system, start = 1, stop = 4) ) 
+larva_ind =  readxl::read_excel(paste0(filepath, "data/2021-06-28_All_results.xlsx"), 
+                             sheet = "larva_dryweight_individual")
+#Split based on before or after switch and add metadata
+larva_ind_8 = larva_ind %>% filter(DPH < 9)
+larva_ind_8 = merge(larva_ind_8, tank_groups, by = "tank_number") 
+larva_ind_18 = larva_ind %>% filter(DPH > 9)
+larva_ind_18 = merge(larva_ind_18, tank_groups, by = "tank_letter") 
+
+larva_ind.1 = bind_rows(larva_ind_8,larva_ind_18 ) #bind dataframes toghether
+larva_ind.2 = larva_ind.1 %>% select(DPH, larvea, mikrogram_DW, Overall_system , System_start) %>% 
+  mutate(method = "Freeze dried", 
+         mikrogram_DW = as.integer(mikrogram_DW), 
+         Overall_system =  case_when(DPH < 9 ~ System_start, 
+                                     T ~ Overall_system) )  
+larva_ind.2 = na.omit(larva_ind.2)  %>% mutate(method = "Individual") #remove samlpes without any weight 
+write.csv(x = larva_ind.2, file = paste0(filepath,"data/2022-06-13_ind_weight.csv"))
+```
+
+#Create dataframe
+```{r}
+#merge the pooled and individual
+larva_c_both.1 = larva_c_both %>% select(DPH, Overall_system, method,mikrogram_DW )
+larva_ind.3 = larva_ind.2 %>% select(DPH, Overall_system, method,mikrogram_DW )
+larva_w_both  = dplyr::bind_rows(larva_c_both.1,larva_ind.3) 
+```
+
+#plot
+```{r}
+larva_w_both %>% mutate(milligram_DW = mikrogram_DW/1000) %>% 
+  mutate(Overall_system = case_when(DPH == 2 ~ "Initial", 
+         TRUE ~ Overall_system) )  %>% 
+  ggplot2::ggplot(aes(x=Overall_system, y = milligram_DW, group = Overall_system, shape = method)) + 
+  my.theme + 
+  geom_point(size = 3, 
+             aes(shape = method, fill = Overall_system), color = "black") + 
+  
+  geom_point(size = 2.5,  
+             aes(color = Overall_system, shape = method)) + 
+  
+  geom_point(color = "black", fill = NA, size = 3, 
+             aes(shape = method)) + 
+  
+  guides(colour = guide_legend(override.aes = list(shape = 21)), 
+         shape = guide_legend(nrow = 2)) + 
+  coord_cartesian(expand = TRUE) + 
+  scale_y_continuous(trans = "log10") + 
+  facet_grid(~DPH, labeller = labeller(DPH = label_value), scales = "free_x", space = "free_x") + 
+  xlab("") + 
+  ylab("Dryweigth [mg/larvae]") + 
+  
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        legend.position = "bottom", text = element_text(size = 14)) + 
+  
+  stat_summary(fun.data = min.mean.sd.max,
+               aes(fill = Overall_system),
+                geom = "boxplot", color = "black", width = 0.5,
+               alpha = 0.7, show.legend = FALSE, position = position_dodge2()) + 
+  scale_color_manual("Rearing condition",  values = system_overall_color) + 
+  scale_fill_manual("Rearing condition",values = system_overall_fill) + 
+  scale_shape_manual("Method", values = c(21,23))   
+
+ggsave(filename = paste0(filepath_figures, "weight-by-dph-group.svg"), width = 180, height = 100, units = "mm")
+```
+
+```{r}
+saveRDS(larva_w_both, file = paste0(filepath_results, "dryweigth.RDS"))
+saveRDS(larva_c_both, file = paste0(filepath_results, "dryweigth_w-tank.RDS"))
+```
+
+Flinger, shapiro wilk and anova
+```{r}
+DPH_4 = larva_w_both %>% filter(DPH == 4)
+fligner.test(data = DPH_4, mikrogram_DW ~ Overall_system)
+shapiro.test(DPH_4$mikrogram_DW)
+# Compute the analysis of variance
+res.aov.DPH_4 = aov(mikrogram_DW ~ Overall_system, data = DPH_4)
+# Summary of the analysis
+summary(res.aov.DPH_4)
+```
+
+```{r}
+DPH_7 = larva_w_both %>% filter(DPH == 7)
+fligner.test(data = DPH_7, mikrogram_DW ~ Overall_system)
+shapiro.test(DPH_7$mikrogram_DW) #1.722e-15
+kruskal.test(mikrogram_DW ~ Overall_system, data = DPH_7)
+```
+
+```{r}
+DPH_8 = larva_w_both %>% filter(DPH == 8)
+fligner.test(data = DPH_8, mikrogram_DW ~ Overall_system)
+shapiro.test(DPH_8$mikrogram_DW)
+kruskal.test(mikrogram_DW ~ Overall_system, data = DPH_8)
+```
+```{r}
+DPH_12 = larva_w_both %>% filter(DPH == 12)
+fligner.test(data = DPH_12, mikrogram_DW ~ Overall_system)
+shapiro.test(DPH_12$mikrogram_DW)
+kruskal.test(mikrogram_DW ~ Overall_system, data = DPH_12)
+```
+
+```{r}
+DPH_17 = larva_w_both %>% filter(DPH == 17)
+fligner.test(data = DPH_17, mikrogram_DW ~ Overall_system)
+shapiro.test(DPH_17$mikrogram_DW)
+kruskal.test(mikrogram_DW ~ Overall_system, data = DPH_17)
+```
+```{r}
+DPH_18 = larva_w_both %>% filter(DPH == 18)
+fligner.test(data = DPH_18, mikrogram_DW ~ Overall_system)
+shapiro.test(DPH_18$mikrogram_DW)
+# Compute the analysis of variance
+res.aov.DPH_18 = aov(mikrogram_DW ~ Overall_system, data = DPH_18)
+# Summary of the analysis
+summary(res.aov.DPH_18)
+```
+
+```{r}
+# n larvae per tank per sampling point 
+#multiple
+n_larva = larva_c %>% filter(DPH != 2) %>% group_by(DPH, tank_number, Overall_system) %>% mutate(n_larva = as.numeric(n_larva)) %>% summarise(n = n(), larvae = sum(n_larva))
+a = larva_c %>% group_by(DPH, tank_number, Overall_system) %>% mutate(n_larva = as.numeric(n_larva)) %>% summarise(n = n() ) 
+```

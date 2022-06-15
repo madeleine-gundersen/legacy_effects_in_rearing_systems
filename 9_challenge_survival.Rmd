@@ -1,0 +1,110 @@
+---
+title: "Challenge survival"
+---
+
+```{r}
+#libraries
+library(dplyr)
+library(ggplot2)
+library(readxl)
+```
+
+```{r}
+# seed and pathways
+set.seed(0201)
+#sessionInfo()
+
+filepath = "~/OneDrive - NTNU/Doktorgrad/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS/"
+filepath_results = paste0("~/OneDrive - NTNU/Doktorgrad/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS/results/", Sys.Date(), "_")
+filepath_figures = paste0("~/OneDrive - NTNU/Doktorgrad/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS/figures/",  Sys.Date(), "_")
+
+source(paste0(filepath, "/functions/plot.settings.R"))
+source(paste0(filepath, "/functions/min.mean.sd.max.R"))
+```
+
+```{r}
+#attach data set
+challenge = readxl::read_excel(paste0(filepath, "data/2021-06-28_All_results.xlsx"), 
+                             sheet = "sidetank_larvaesurvival")
+
+tank_groups = readxl::read_excel(paste0(filepath, "data/2021-06-28_All_results.xlsx"), 
+                             sheet = "tank_selection")
+
+tank_groups = tank_groups %>% mutate(System_start = substr(Overall_system, start = 1, stop = 4) ) 
+
+
+
+challenge.1 = merge(challenge, tank_groups, by ="tank_number") %>% 
+  select(tank_number, DPH,  survival, Challenged, Overall_system,System_start  ) %>% 
+  mutate(type = case_when(Challenged == "yes" ~ "Invasion challenge", 
+                          TRUE ~ "Transfer challenge"), 
+         DPH = factor(DPH, levels = c("8", "11", "17"))) %>%
+  mutate(type = factor(type, levels = c("Transfer challenge", "Invasion challenge"))) %>%
+  na.omit() %>%
+  mutate(Overall_system = case_when(DPH == "8" ~ System_start, 
+                                    T ~ Overall_system))
+
+
+
+```
+```{r}
+challenge.1 %>%
+  ggplot2::ggplot(aes(x = DPH, y = survival, fill = Overall_system, color = Overall_system)) + 
+     stat_summary(fun.data = min.mean.sd.max,
+               aes(fill = Overall_system),
+                geom = "boxplot", color = "black", width = 0.5, show.legend = FALSE, position = position_dodge2()) +
+  ggh4x::facet_nested(~type + System_start, scales = "free_x") + 
+  my.theme + 
+  scale_color_manual("Rearing condition",  values = system_overall_color) + 
+  scale_fill_manual("Rearing condition",values = system_overall_fill) + 
+  scale_shape_manual("Rearing condition",values = system_overall_shape21) +  
+  guides(colour = guide_legend(override.aes = list(shape = 21)), 
+         shape = guide_legend(nrow = 2)) +
+  
+    geom_point(size = 3, position = position_dodge(width = 0.5),
+             aes(shape = Overall_system, fill = Overall_system), color = "black") + 
+  
+  geom_point(size = 2.5,  position = position_dodge(width = 0.5), 
+             aes(color = Overall_system, shape = Overall_system), fill = NA) + 
+  
+  geom_point(color = "black", fill = NA, size = 3, position = position_dodge(width = 0.5), 
+             aes(shape = Overall_system)) + 
+  theme(legend.position = "right") +
+  ylab("Survival (%)") + 
+  theme(text = element_text(size = 14), panel.spacing = unit(0.1,'lines') , 
+        axis.text.x = element_text(angle = 20)) 
+
+ggsave(filename = paste0(filepath_figures, "challenge_survival.svg"), width = 180, height = 80, units = "mm")
+```
+
+
+```{r}
+challenge.1 %>% group_by(type) %>%
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+challenge.1 %>% filter(Challenged == "no") %>% 
+  group_by(System_start) %>%
+  summarise(mean_sur = mean(survival))
+
+challenge.1 %>% filter(Challenged == "no", DPH == "17") %>% 
+  group_by(Overall_system) %>%
+  summarise(mean_sur = mean(survival))
+
+challenge.1 %>% mutate(cc = substr(System_start, 4,4)) %>%
+  filter(Challenged == "yes") %>% 
+  group_by(cc) %>% 
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+challenge.1 %>% 
+  filter(Challenged == "yes") %>% 
+  group_by(System_start) %>% 
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+challenge.1 %>%
+  filter(Challenged == "yes", DPH %in% c("11","17")) %>% 
+  group_by(Overall_system) %>% 
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+69.444444/19.791667
+```
+

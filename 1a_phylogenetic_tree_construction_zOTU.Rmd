@@ -1,0 +1,72 @@
+---
+title: "Aligning sequences and creating phylogenetic tree"
+---
+
+```{r}
+#install and load required packages
+#Bios2cor -- used to import fasta (fa) file into R
+install.packages("Bios2cor")
+library(Bios2cor)
+#seqinr -- used to export fasta files from R
+library(seqinr)
+#readxl -- used to import excel files to R
+library(readxl)
+#tibble -- datahandling package
+library(tidyverse)
+library(tibble)
+library(dplyr)
+# packages to handle list filterng
+library(rlist)
+library(pipeR)
+#decipher -- used to create multiple alignment of the sequences 
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("DECIPHER")
+library(DECIPHER)
+# dada2 package to handle sequence data
+#BiocManager::install("dada2")
+library(dada2)
+#phangorn -- used to create a phylogenetic three
+#install.packages("phangorn")
+library(phangorn)
+```
+followed the toturial from http://web.stanford.edu/class/bios221/MicrobiomeWorkflowII.html
+My sequences are stored in an .fa file. 
+```{r}
+# import sequences 
+file_location = "/data/zOTUs/phylogenetic_tree_construction/zotus.fa"
+sequences = Bios2cor::import.fasta(file = file_location)
+#total of 4434 sequences - dataset part of larger sequencing dataset. Remove sequences not in experiment
+
+zOTUs_keep = readxl::read_excel("/data/zOTUs/phylogenetic_tree_construction/zOTUS_names_indataset.xlsx", col_names = FALSE)
+colnames(zOTUs_keep) = "zOTUs_keep"
+seq_keep = sequences[zOTUs_keep$zOTUs_keep] #filters all sequences that matches the names of zOTU_keep
+# total of 2436 sequences
+
+#saved sequences as fasta file. 
+seqinr::write.fasta(sequences = seq_keep, names = names(seq_keep), 
+                    file.out =  "/data/zOTUs/phylogenetic_tree_construction/zOTUsequences_to_keep.fa")
+```
+
+```{r}
+#import the fasta file into object called seqs
+seqs <- dada2::getSequences(object = "/data/zOTUs/phylogenetic_tree_construction/zOTUsequences_to_keep.fa")
+
+# tip labels are zOTU names (i.e. zOTU1, zOTU10, ect)
+#align zOTU sequences using the  DECIPHER package.
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA,verbose=FALSE)
+```
+
+The phangorn R package is then used to construct a phylogenetic tree. Here we first construct a neighbor-joining tree, and then fit a GTR+G+I (Generalized time-reversible with Gamma rate variation) maximum likelihood tree using the neighbor-joining tree as a starting point.
+```{r}
+phangAlign <- phangorn::phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phangAlign)
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit = pml(treeNJ, data=phangAlign)
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
+        rearrangement = "stochastic", control = pml.control(trace = 0))
+
+saveRDS(fitGTR, file = "data/zOTUs/zOTU_phytree.RDS")
+```
+
