@@ -1,0 +1,264 @@
+---
+title: "Alpha diversity"
+---
+#Packages and dataset
+```{r}
+#libraries
+library(phyloseq)
+library(vegan)
+library(dplyr)
+library(ggplot2)
+library(svglite)
+```
+
+```{r}
+# seed and pathways
+set.seed(0201)
+sessionInfo()
+filepath = "~/Library/CloudStorage/OneDrive-NTNU/Doktorgrad/Ferdige prosjekter/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS"
+filepath_results =paste0( filepath, "/results/", Sys.Date(), "_")
+filepath_figures = paste0(filepath, "/figures/" , Sys.Date(), "_")
+full_experiment = readRDS(file = paste0(filepath,"/data/zOTUs/2022-01-11_zOTU_raw_dataset.rds") ) 
+source(paste0(filepath, "/revised_figures_scripts/plot.settings.R"))
+```
+
+```{r}
+#attach data set
+exp_nor = readRDS(file = paste0(filepath,"/results/2022-01-11_zOTU_dataset_scaled_rarified.rds") ) 
+```
+
+#Calculate alpha-diversity
+```{r}
+# calculate alpha diversity of order 0-2 for the full data set
+t_OTU_table = t(as.data.frame(exp_nor@otu_table))
+hillnumbers = vegan::renyi(t_OTU_table, scales = c(0,1), hill = TRUE) #calculates diversity of different orders for the data set 
+colnames(hillnumbers) =  c("Order0", "Order1")
+hillnumbers$evenness =  hillnumbers$Order1/hillnumbers$Order0
+#add the hill numbers to the environmental variables for easy plotting. 
+sample_data(exp_nor) <- base::cbind(sample_data(exp_nor), hillnumbers) #add the hill numbers to the environmental variables
+df_alpha = data.frame(exp_nor@sam_data)
+df_alpha$samplename = rownames(df_alpha)
+df_alpha = reshape2::melt(df_alpha, id.vars = colnames(df_alpha)[c(1:12,16)])
+colnames(df_alpha)[14:15] = c("Order", "Diversity_number")
+```
+
+#Alpha diveristy plot
+```{r}
+df_alpha %>% 
+  dplyr::filter(Order != "evenness") %>% 
+  mutate(DPH  = as.character(DPH)) %>% 
+  ggplot2::ggplot(aes(x = Start_system, y = Diversity_number, group = DPH)) + 
+  my.theme + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("DPH",values = system_shape_day) +  
+  facet_wrap(~Order, scales = "free" ) +
+  geom_point(size = 3, alpha = 0.8, 
+             aes(shape = DPH, fill = Overall_system), color = "black") +
+  guides(fill = guide_legend(override.aes = list(shape = 21)), 
+         shape = guide_legend(nrow = 2)) + 
+  coord_cartesian(expand = TRUE) + 
+  theme(legend.position = "bottom") + 
+  ylab("Hill numbers") + 
+  xlab("Initial treatment") + 
+  theme( legend.position = "right")
+
+ggsave(filename = paste0(filepath_figures, "alpha-diveristy-ord01_rarified.png"), width = 180, height = 100, units = "mm")
+```
+
+#Difference 1 DPH between treatment
+## Order 0
+```{r}
+df_alpha_d0 = df_alpha %>% filter(Order == "Order0", DPH == 1)
+
+fligner.test(data = df_alpha_d0, Diversity_number ~ Current_water) 
+#Fligner-Killeen:med chi-squared = 3.0271, df = 1, p-value = 0.08188 --> data is homogeneous
+shapiro.test(df_alpha_d0$Diversity_number) # W = 0.93824, p-value = 0.3281 --> data is normal dist
+
+lm.d0_1DPH <- lm(data = df_alpha_d0, 
+               formula = Diversity_number ~ Overall_system) 
+av.d0_1DPH <- aov(lm.d0_1DPH)
+summary(av.d0_1DPH)
+tukey.test.d0_1DPH <- TukeyHSD(av.d0_1DPH)
+tukey.test.d0_1DPH
+
+df_alpha_d0 %>% 
+  mutate(MMS = case_when(Current_system == "MMS-" ~ "MMS-", 
+                         TRUE ~ "the_rest")) %>% 
+  group_by(MMS) %>% 
+  summarise(mean = mean(Diversity_number)) 
+
+round(307.5000/205.0833, 2) #1.499391, MMS/all other treatments
+```
+
+## Order 1
+```{r}
+df_alpha_d1 = df_alpha %>% filter(Order == "Order1", DPH == 1)
+
+fligner.test(data = df_alpha_d1, Diversity_number ~ Current_water)
+#Fligner-Killeen:med chi-squared = 0.12508, df = 1, p-value = 0.7236
+shapiro.test(df_alpha_d1$Diversity_number)
+#W = 0.92864, p-value = 0.232
+
+lm.d1_1DPH <- lm(data = df_alpha_d1, 
+               formula = Diversity_number ~ Current_water+cc) 
+av.d1_1DPH <- aov(lm.d1_1DPH)
+summary(av.d1_1DPH)
+tukey.test.d1_1DPH <- TukeyHSD(av.d1_1DPH)
+tukey.test.d1_1DPH
+
+df_alpha_d1 %>% 
+  group_by(Current_water) %>% 
+  summarise(mean = mean(Diversity_number)) 
+
+round(39.47752/24.81293, 2)
+```
+
+
+
+#Difference 12 DPH between treatments
+## Order 0
+```{r}
+df_alpha_d0_12DPH = df_alpha %>% filter(Order == "Order0", DPH == 12)
+fligner.test(data = df_alpha_d0_12DPH, Diversity_number ~ Current_water)
+#Fligner-Killeen:med chi-squared = 8.4429, df = 1, p-value = 0.003665 --> not homogeneous
+shapiro.test(df_alpha_d0_12DPH$Diversity_number) # p > 0.05 ---> data is normally distributed
+
+lm.d0_12DPH <- lm(data = df_alpha_d0_12DPH, 
+               formula = Diversity_number ~ Overall_system) 
+av.d0_12DPH <- aov(lm.d0_12DPH)
+summary(av.d0_12DPH)
+tukey.test.d0_12DPH <- TukeyHSD(av.d0_12DPH)
+tukey.test.d0_12DPH
+
+View(tukey.test.d0_12DPH$Overall_system)
+
+df_alpha_d0_12DPH %>% 
+  group_by(cc_s, Start_system, Overall_system) %>% 
+  summarise(mean = mean(Diversity_number), n=n()) 
+```
+## Order 1
+```{r}
+df_alpha_d1_12DPH = df_alpha %>% filter(Order == "Order1", DPH == 12)
+fligner.test(data = df_alpha_d1_12DPH, Diversity_number ~ Current_water)
+#Fligner-Killeen:med chi-squared = 1.0958, df = 1, p-value = 0.2952 -->  homogeneous
+shapiro.test(df_alpha_d1_12DPH$Diversity_number) # p > 0.05 ---> data is normally distributed
+
+lm.d1_12DPH <- lm(data = df_alpha_d1_12DPH, 
+               formula = Diversity_number ~ Overall_system) 
+av.d1_12DPH <- aov(lm.d1_12DPH)
+summary(av.d1_12DPH)
+tukey.test.d1_12DPH <- TukeyHSD(av.d1_12DPH)
+tukey.test.d1_12DPH
+
+View(tukey.test.d1_12DPH$Overall_system)
+
+df_alpha_d1_12DPH %>% 
+  group_by(cc_s, Start_system, Overall_system) %>% 
+  summarise(mean = mean(Diversity_number), n=n()) 
+```
+
+# Ratio increase 1 vs 12 DPH
+## overall system level
+```{r}
+df_alpha_increase = df_alpha %>% filter(Order != "evenness")
+meandiv_combined = df_alpha_increase %>% group_by(Order, Overall_system, Start_system, DPH) %>% 
+  summarise(mean_div = mean(Diversity_number), n = n()) %>% 
+  mutate(DPH = paste0("Day_",DPH))
+
+reshape2::dcast(data = meandiv_combined, formula = Order+Overall_system+Start_system~DPH, value.var = "mean_div") %>% 
+  tidyr::fill(Day_1) %>% #fill in start values for the switched by coping row above
+  mutate(ratio = round(Day_12/Day_1 , 2) ) %>% #look at ratio from day 12 to 1 
+  ggplot(aes(x=Overall_system, y = ratio)) + 
+  geom_hline(yintercept = 1, color = "red") + 
+  geom_bar(stat = "identity") + 
+  ggh4x::facet_nested(Order~Start_system, scales = "free_x") +
+  my.theme + 
+  geom_label(aes(label = paste0(ratio)), position=position_dodge(width=0.9), vjust=0.5) + 
+  geom_hline(yintercept = 0, color = "black") + 
+  coord_cartesian(expand = TRUE) + 
+  ylab("Ratio 12 DPH / 1 DPH") + 
+  xlab("Rearing treatment")
+
+ggsave(filename = paste0(filepath_figures, "Average percent increase in diversity given initial rearing regime.svg"), width = 180, height = 100, units = "mm")
+```
+## tank level 
+```{r}
+tank_div = df_alpha_increase %>% 
+  group_by(Order, Start_system,Current_system, DPH, Tank) %>% 
+  mutate(DPH = paste0("Day_",DPH))
+
+tank_ratio = reshape2::dcast(data = tank_div,formula =  Order+Tank~DPH, value.var = "Diversity_number") %>% 
+  mutate(ratio = round(Day_12/Day_1 ,2)) 
+
+tank_meta  = df_alpha_increase %>% filter(DPH == 12) %>% 
+  group_by(Tank, Overall_system, Start_system, Current_system ) %>% 
+  summarise(n = n()) 
+
+tank = merge(tank_meta, tank_ratio) %>% group_by(Order, Overall_system, Start_system, Current_system)  
+
+tank %>%   
+  ggplot(aes(y=Start_system, x = ratio, fill = Overall_system, group = Tank)) + 
+    geom_vline(xintercept = 1, color = "red") + 
+  geom_bar(stat = "identity", position = position_dodge(), color = "black", orientation = "y") + 
+  facet_grid(~Order) +
+  my.theme + 
+  geom_text(aes(label = paste0(ratio)), position=position_dodge(1), 
+            vjust=0.5, hjust = -0.1,angle = 0,  size = 4) + 
+  coord_cartesian(expand = TRUE,xlim = c(0,10)) + 
+  scale_fill_manual(values = system_overall_fill) 
+```
+ 
+---- NOT IN MANUSCRIPT ----- 
+
+```{r}
+# MMS vs FTS at 12 DPH
+df_alpha_12DPH = df_alpha %>% mutate(DPH = as.character(DPH)) %>%
+  group_by(Order, Current_water, DPH) %>% 
+  filter(DPH == 12) 
+
+df_alpha_12DPH %>%  
+  summarise(mean_div = round(mean(Diversity_number), 0))
+
+order1_ratio = 48/51 #MMS/FTS  0.9411765
+order0_ratio = 291/269 #MMS/FTS 1.081784
+```
+
+Carrying capacity differences 
+```{r}
+df_alpha %>% 
+  dplyr::filter(Order != "evenness") %>% 
+  mutate(DPH  = as.character(DPH)) %>% 
+  group_by(Order, cc) %>% 
+summarise(mean_div = mean(Diversity_number), n = n()) 
+
+#Overall difference
+290.37500/220.25000 #1.318388
+50.11565/31.36190 # 1.597979
+
+df_alpha %>% 
+  dplyr::filter(Order != "evenness") %>% 
+  mutate(DPH  = as.character(DPH)) %>% 
+  group_by(Order, DPH, cc) %>% 
+summarise(mean_div = mean(Diversity_number), n = n()) 
+328.50000/231.37500	#1.419773
+67.41259/ 31.25208	#2.157059	
+```
+
+```{r}
+#Anova cc day 12
+df_order1.12 = df_alpha %>% filter(Order == "Order1", DPH == 12)
+fligner.test(data = df_order1.12, Diversity_number ~ cc) #not sig
+shapiro.test(df_order1.12$Diversity_number) #not sig
+
+res.aov.1.12 = aov(Diversity_number ~ cc, data = df_order1.12)
+# Summary of the analysis
+summary(res.aov.1.12) # p 6.83e-06
+
+df_order0.12 = df_alpha %>% filter(Order == "Order0", DPH == 12)
+fligner.test(data = df_order0.12, Diversity_number ~ cc) #not sig
+shapiro.test(df_order0.12$Diversity_number) #not sig
+
+res.aov.0.12 = aov(Diversity_number ~ cc, data = df_order0.12)
+# Summary of the analysis
+summary(res.aov.0.12) # p 7.25e-05
+```

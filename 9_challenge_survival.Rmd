@@ -1,0 +1,159 @@
+---
+title: "Challenge survival"
+---
+
+```{r}
+#libraries
+library(dplyr)
+library(ggplot2)
+library(readxl)
+```
+
+```{r}
+# seed and pathways
+set.seed(0201)
+#sessionInfo()
+
+filepath = "~/Library/CloudStorage/OneDrive-NTNU/Doktorgrad/Ferdige prosjekter/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS"
+filepath_results =paste0( filepath, "/results/", Sys.Date(), "_")
+filepath_figures = paste0(filepath, "/figures/" , Sys.Date(), "_")
+
+source(paste0(filepath, "/revised_figures_scripts/plot.settings.R"))
+source(paste0(filepath, "/revised_figures_scripts/min.mean.sd.max.R"))
+```
+
+```{r}
+#attach data set
+challenge = readxl::read_excel(paste0(filepath, "/data/2021-06-28_All_results.xlsx"), 
+                             sheet = "sidetank_larvaesurvival")
+
+tank_groups = readxl::read_excel(paste0(filepath, "/data/2021-06-28_All_results.xlsx"), 
+                             sheet = "tank_selection")
+
+tank_groups = tank_groups %>% mutate(System_start = substr(Overall_system, start = 1, stop = 4) ) 
+
+
+
+challenge.1 = merge(challenge, tank_groups, by ="tank_number") %>% 
+  select(tank_number, DPH,  survival, Challenged, Overall_system,System_start  ) %>% 
+  mutate(type = case_when(Challenged == "yes" ~ "Invasion challenge", 
+                          TRUE ~ "Transfer challenge"), 
+         DPH = factor(DPH, levels = c("8", "11", "17"))) %>%
+  mutate(type = factor(type, levels = c("Transfer challenge", "Invasion challenge"))) %>%
+  na.omit() %>%
+  mutate(Overall_system = case_when(DPH == "8" ~ System_start, 
+                                    T ~ Overall_system))
+```
+
+```{r}
+challenge.1 %>%
+  dplyr::mutate(type = substr(type, 1, 8)) %>% 
+  dplyr::mutate(type = factor(type, levels = c("Transfer", "Invasion"))) %>% 
+  ggplot2::ggplot(aes(x = interaction(DPH, type, Overall_system),
+                      y = survival, fill = Overall_system, color = Overall_system, shape = type)) + 
+  
+  stat_summary(fun.data = mean.sd,
+               aes(fill = Overall_system, 
+                   group = interaction(Overall_system, DPH, type)), position = position_dodge(width = 1),
+                geom = "boxplot", width = 0.5, show.legend = FALSE, color = "black", alpha = 0.3) +
+  
+  ggh4x::facet_nested(~System_start+DPH, scales = "free_x", space = "free_x") + 
+  
+  my.theme + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_color_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Challenge", values = c(21,23)) + 
+  guides(fill = guide_legend(title.position = "top", override.aes = list(shape = 21, size = 3)), 
+         shape = guide_legend(title.position = "top", nrow = 2),  override.aes = list(size = 3)) + 
+  ylab("Survival (%)") + 
+  xlab(label = "DPH") + 
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+       # legend.text = element_text(size =10), 
+      #  legend.title = element_text(size = 12), 
+        legend.position = "bottom") + 
+  
+  geom_point(size = 3, position = position_dodge(width = 1),
+             aes(fill = Overall_system), color = "black") 
+
+```
+```{r}
+ggsave(filename = paste0(filepath_figures, "challenge_survival.svg"), width = 180, height = 90, units = "mm")
+```
+
+
+```{r}
+challenge.1 %>% group_by(type) %>%
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+challenge.1 %>% filter(Challenged == "no") %>% 
+  group_by(System_start) %>%
+  summarise(mean_sur = mean(survival))
+
+challenge.1 %>% filter(Challenged == "no", DPH == "17") %>% 
+  group_by(Overall_system) %>%
+  summarise(mean_sur = mean(survival))
+
+challenge.1 %>% mutate(cc = substr(System_start, 4,4)) %>%
+  filter(Challenged == "yes") %>% 
+  group_by(cc) %>% 
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+challenge.1 %>% 
+  filter(Challenged == "yes") %>% 
+  group_by(System_start) %>% 
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+challenge.1 %>%
+  filter(Challenged == "yes", DPH %in% c("11","17")) %>% 
+  group_by(Overall_system) %>% 
+  summarise(mean_sur = mean(survival), sd = sd(survival))
+
+69.444444/19.791667
+```
+
+# Transfer challenge
+```{r}
+challenge.1_t = challenge.1 %>% filter(Challenged == "no")
+
+fligner.test(data = challenge.1_t, survival ~ Overall_system) 
+#Fligner-Killeen:med chi-squared = 5.4018, df = 6, p-value = 0.4934 --> data is homogeneous
+shapiro.test(challenge.1_t$survival) #W = 0.91683, p-value = 0.025371 --> data is not normal dist
+
+kruskal.test(survival ~ Overall_system, data = challenge.1_t)
+
+
+challenge.1_t = challenge.1 %>% filter(Challenged == "no", DPH == 17)
+
+fligner.test(data = challenge.1_t, survival ~ Overall_system) 
+#Fligner-Killeen:med chi-squared = 11.173, df = 6, p-value = 0.08319 --> data is homogeneous
+shapiro.test(challenge.1_t$survival) #W = 0.90208, p-value = 0.05307 --> data is not normal dist
+
+lm.challenge.1_t <- lm(data = challenge.1_t, 
+               formula = survival ~ Overall_system) 
+av.challenge.1_t <- aov(lm.challenge.1_t)
+summary(av.challenge.1_t)
+tukey.test.challenge.1_t <- TukeyHSD(av.challenge.1_t)
+tukey.test.challenge.1_t
+
+
+kruskal.test(survival ~ Overall_system, data = challenge.1_t)
+```
+
+
+```{r}
+lm.d0_1DPH <- lm(data = df_alpha_d0, 
+               formula = Diversity_number ~ Overall_system) 
+av.d0_1DPH <- aov(lm.d0_1DPH)
+summary(av.d0_1DPH)
+tukey.test.d0_1DPH <- TukeyHSD(av.d0_1DPH)
+tukey.test.d0_1DPH
+
+df_alpha_d0 %>% 
+  mutate(MMS = case_when(Current_system == "MMS-" ~ "MMS-", 
+                         TRUE ~ "the_rest")) %>% 
+  group_by(MMS) %>% 
+  summarise(mean = mean(Diversity_number)) 
+
+```
+

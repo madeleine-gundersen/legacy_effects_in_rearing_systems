@@ -1,0 +1,279 @@
+---
+title: "Beta diversity"
+---
+
+```{r}
+#libraries
+library(phyloseq)
+library(vegan)
+library(dplyr)
+library(ggplot2)
+library(ggConvexHull) #devtools::install_github("cmartin/ggConvexHull")
+library(reshape2)
+library(ggh4x) # devtools::install_github("teunbrand/ggh4x")
+library(ggpubr)
+```
+
+```{r}
+# seed and pathways
+set.seed(0201)
+sessionInfo()
+filepath = "~/Library/CloudStorage/OneDrive-NTNU/Doktorgrad/Ferdige prosjekter/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS"
+filepath_results =paste0( filepath, "/results/", Sys.Date(), "_")
+
+filepath_figures = paste0(filepath, "/figures/" , Sys.Date(), "_")
+full_experiment = readRDS(file = paste0(filepath,"/data/zOTUs/2022-01-11_zOTU_raw_dataset.rds") ) 
+source(paste0(filepath, "/revised_figures_scripts/plot.settings.R"))
+```
+
+```{r}
+#attach data set
+exp_nor = readRDS(file = paste0(filepath,"/results/2022-01-11_zOTU_dataset_scaled_rarified.rds") )
+```
+
+
+# All samples 
+##BC
+```{r}
+physeq = exp_nor 
+
+ordination_bray = phyloseq::ordinate(physeq = physeq, method = "PCoA", distance = "bray") 
+plot_bray = phyloseq::plot_ordination(physeq = physeq, ordination = ordination_bray, 
+                                      title = "Bray-Curtis",  axes = c(1,2), justDF = T)
+
+evals1 <- round(ordination_bray$values$Eigenvalues[1] / sum(ordination_bray$values$Eigenvalues) * 100, 1)
+evals2 <- round(ordination_bray$values$Eigenvalues[2] / sum(ordination_bray$values$Eigenvalues) * 100, 1)
+
+bcplot = plot_bray %>% 
+  mutate(DPH = factor(DPH, levels = c("1", "12"))) %>% 
+  ggplot2::ggplot(aes(x=Axis.1, y = Axis.2, fill = Overall_system, shape = DPH) ) + 
+
+  geom_hline(yintercept = 0, color = "grey60") + 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  xlab(paste("PCoA 1 (", evals1, "%)", sep = "")) +
+  ylab(paste("PCoA 2 (", evals2, "%)", sep = "")) + 
+  
+  my.theme + 
+  theme(text=element_text(family = "Helvetica", size = 12)) +  
+  guides(fill = guide_legend(override.aes = list(shape = 21 ))) + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("DPH",values = system_shape_day) + 
+  guides(colour = guide_legend(override.aes = list(shape = 21, linetype = rep(0,8) ) )) + 
+  coord_fixed(ratio = evals2/evals1) + 
+  geom_point(size = 3) + 
+  ggtitle("Bray-Curtis PCoA ordination")
+
+ggsave(bcplot, filename = paste0(filepath_figures, "bc-PCoA.svg"), width = 180, height = 70, units = "mm")
+```
+
+##W uuni
+```{r}
+physeq = exp_nor 
+
+ordination_wuni = phyloseq::ordinate(physeq = physeq, method = "PCoA", distance = "wunifrac") 
+plot_wuni = phyloseq::plot_ordination(physeq = physeq, ordination = ordination_wuni, 
+                                      title = "Bray-Curtis",  axes = c(1,2), justDF = T)
+
+evals1_w <- round(ordination_wuni$values$Eigenvalues[1] / sum(ordination_wuni$values$Eigenvalues) * 100, 1)
+evals2_w <- round(ordination_wuni$values$Eigenvalues[2] / sum(ordination_wuni$values$Eigenvalues) * 100, 1)
+
+wuni_plot = plot_wuni %>% 
+  mutate(DPH = factor(DPH, levels = c("1", "12"))) %>% 
+  ggplot2::ggplot(aes(x=Axis.1, y = Axis.2, fill = Overall_system, shape = DPH) ) + 
+
+  geom_hline(yintercept = 0, color = "grey60") + 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  xlab(paste("PCoA 1 (", evals1_w, "%)", sep = "")) +
+  ylab(paste("PCoA 2 (", evals2_w, "%)", sep = "")) + 
+  
+  my.theme + 
+ # guides(fill = guide_legend(override.aes = list(shape = 21 ))) + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("DPH",values = system_shape_day) + 
+  #guides(colour = guide_legend(override.aes = list(shape = 21, linetype = rep(0,8) ) )) + 
+  coord_fixed(ratio = evals2_w/evals1_w) + 
+  geom_point(size = 3) + 
+    theme(plot.margin=unit(c(-0.40,0,-0.4,0), "null")) + 
+  ggtitle("Weighted UniFrac PCoA ordination") + 
+  theme(legend.position = "none")
+
+ggsave(wuni_plot, filename = paste0(filepath_figures, "wuni-PCoA.svg"), width = 180, height = 70, units = "mm")
+```
+
+# Quantifying beta diveristy values
+```{r}
+physeq = exp_nor
+distance = phyloseq::distance(physeq = physeq, method = "bray", type = "samples")
+dist_matrix = as.matrix(distance)
+dist_matrix[upper.tri(dist_matrix)] <- NA
+distance_df = melt(dist_matrix, varnames = c("Sample_A", "Sample_B"))
+distance_df$value = 1-distance_df$value #converts to similarity
+colnames(distance_df)[3] = "BrayCurtis_sim"
+distance_df = na.omit(distance_df)
+
+col_keep = c("Sample", "DPH","Tank","Start_system","Current_system","Overall_system", "cc" , "cc_s")
+metaA = data.frame(sample_data(physeq)) %>% select(col_keep)
+colnames(metaA) = paste0(colnames(metaA), "_A") 
+metaA = metaA %>% mutate(switched_A = case_when(Start_system_A == Current_system_A ~ "no", 
+                                      TRUE ~ "yes"))
+metaB = data.frame(sample_data(physeq)) %>% select(col_keep)
+colnames(metaB) = paste0(colnames(metaB), "_B") 
+metaB = metaB %>% mutate(switched_B = case_when(Start_system_B == Current_system_B ~ "no", 
+                                      TRUE ~ "yes"))
+
+distance_df_a = merge(distance_df, metaA, by = "Sample_A")
+distance_df_both = merge(distance_df_a, metaB, by = "Sample_B")
+saveRDS(object = distance_df_both, file = paste0(filepath_results, "bray-curtis-values-between-all-samples.RDS"))
+```
+
+```{r}
+distance_df_both = readRDS(file = paste0(filepath, "/results/2022-01-14_bray-curtis-values-between-all-samples.RDS")) 
+
+dist_day_comp =distance_df_both %>% 
+  filter(Sample_A != Sample_B, 
+         Start_system_A == Start_system_B) %>%
+  mutate(day_comp = paste0("DPH: ", DPH_A, " vs ", DPH_B)) %>% 
+  mutate(day_comp = case_when(day_comp == "DPH: 12 vs 1" ~ "DPH: 1 vs 12", 
+                              TRUE ~ day_comp)) %>% 
+  filter(case_when(day_comp == "DPH: 1 vs 1" ~ Current_system_A == Current_system_B, 
+                   day_comp == "DPH: 12 vs 12" ~ Current_system_A == Current_system_B, 
+                   day_comp == "DPH: 1 vs 12" ~ Sample_A == Sample_A) ) %>%
+  mutate(switch = paste0(switched_A, " vs ", switched_B)) %>%
+  mutate(switch = case_when(switch == "no vs yes" ~ "yes vs no", 
+                              TRUE ~ switch), 
+         comp = case_when(switch == "no vs no" ~ Overall_system_A, 
+                          switch == "yes vs yes" ~ Overall_system_A, 
+                          switch == "yes vs no" ~ paste0(Overall_system_A, " vs ", Overall_system_B) ) ) %>% 
+  mutate(comp = case_when(comp == "FTS- to MMS- vs FTS-" ~ "FTS- vs FTS- to MMS-", 
+                          comp == "FTS+ to MMS+ vs FTS+" ~ "FTS+ vs FTS+ to MMS+", 
+                          comp == "MMS- to FTS- vs MMS-" ~ "MMS- vs MMS- to FTS-", 
+                          comp == "MMS+ to FTS+ vs MMS+" ~ "MMS+ vs MMS+ to FTS+",
+                              TRUE ~ comp), 
+         comp_plot = case_when(comp == "FTS- vs FTS- to MMS-"~ "FTS- to MMS-", 
+                          comp == "FTS+ vs FTS+ to MMS+"~ "FTS+ to MMS+", 
+                          comp == "MMS- vs MMS- to FTS-"~ "MMS- to FTS-", 
+                          comp == "MMS+ vs MMS+ to FTS+" ~ "MMS+ to FTS+", 
+                              TRUE ~ comp) ) 
+dist_day_comp = dist_day_comp %>% mutate(switched = case_when(switch == "no vs no" ~ "no", 
+                          switch == "yes vs yes" ~ "no", 
+                          switch == "yes vs no" ~ "yes"))
+```
+
+```{r}
+dist_day_plot =
+dist_day_comp %>% 
+  ggplot2::ggplot(aes(x=Start_system_A, y = BrayCurtis_sim)) + 
+  
+  facet_grid(~day_comp) +
+  my.theme + 
+  
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Switched", values = c(22,23)) +
+  
+  geom_point(size = 3.5, aes(fill = comp_plot, shape = switched) ) + 
+   guides(fill = FALSE) + 
+  theme(legend.position = "bottom") + 
+  xlab("Start system") + 
+  ylab("Bray Curtis similarity") + 
+  ggtitle("Bray-Curtis similarity within rearing treatment")
+
+
+ggsave(dist_day_plot, filename = paste0(filepath_figures, "bc-sim_same_start.svg"), width = 180, height = 80, units = "mm")
+```
+
+
+```{r}
+#ggarrange(bcplot, wuni_plot, common.legend = TRUE, legend = "right", nrow = 3)
+ggarrange(bcplot, wuni_plot, legend = "right", common.legend = TRUE, 
+          ncol = 1 , labels = c("a)", "b)") ) 
+ggsave(filename = paste0(filepath_figures, "PCoA_all-samples-bc_wuni.svg"), width = 180,height = 140,   units = "mm")
+```
+
+
+```{r}
+dist_day_comp %>% filter(day_comp == "DPH: 1 vs 12") %>% group_by(Start_system_A) %>%
+  summarise(mean_BC = round(mean(BrayCurtis_sim), 3), n= n())
+
+
+dist_day_comp %>% filter(day_comp == "DPH: 1 vs 12") %>% group_by(comp) %>%
+  summarise(mean_BC = round(mean(BrayCurtis_sim), 3), n= n())
+```
+
+#Anova 1 vs 12 dph BC
+```{r}
+between_days_bc  = dist_day_comp %>% filter(day_comp == "DPH: 1 vs 12") %>% group_by(Start_system_A) %>%
+  select(day_comp, Start_system_A,Overall_system_A, Start_system_B,Overall_system_B, BrayCurtis_sim )
+
+between_days_bc 
+
+fligner.test(data = between_days_bc, BrayCurtis_sim ~ Start_system_A) #sig
+shapiro.test(between_days_bc$BrayCurtis_sim) # sig
+
+kruskal.test(BrayCurtis_sim ~ Start_system_A, data = between_days_bc)
+
+
+res.aov.1.12 = aov(Diversity_number ~ cc, data = between_days_bc)
+# Summary of the analysis
+summary(res.aov.1.12) # p 6.83e-06
+```
+
+
+
+---- NOT IN MANUSCRIPT ---- 
+# Only 12 DPH 
+```{r}
+physeq = phyloseq::subset_samples(exp_nor, DPH == 12)
+
+ordination_bray = phyloseq::ordinate(physeq = physeq, method = "PCoA", distance = "bray") 
+plot_bray_d12 = phyloseq::plot_ordination(physeq = physeq, ordination = ordination_bray, 
+                                      title = "Bray-Curtis",  axes = c(1,2), justDF = T)
+
+evals1_12 <- round(ordination_bray$values$Eigenvalues[1] / sum(ordination_bray$values$Eigenvalues) * 100, 1)
+evals2_12 <- round(ordination_bray$values$Eigenvalues[2] / sum(ordination_bray$values$Eigenvalues) * 100, 1)
+
+bcplot_d12  =
+plot_bray_d12 %>% 
+  ggplot2::ggplot(aes(x=Axis.1, y = Axis.2, fill = Overall_system, shape = Overall_system) ) + 
+  
+  ggConvexHull::geom_convexhull(alpha = 0.3, aes(fill = Current_system, group = Current_system))  +
+  
+  geom_hline(yintercept = 0, color = "grey60") + 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  xlab(paste("PCoA 1 (", evals1_12, "%)", sep = "")) +
+  ylab(paste("PCoA 2 (", evals2_12, "%)", sep = "")) + 
+  my.theme + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Rearing treatment",values = system_overall_shape_2123) + 
+  coord_fixed(ratio = evals2_12/evals1_12) + 
+  geom_point(size = 3) 
+
+ggsave(bcplot_d12, filename = paste0(filepath_figures, "PCoA_all-samples-bc_day12.svg"), width = 180, height = 100, units = "mm")
+```
+
+# Only low cc 
+```{r}
+physeq = phyloseq::subset_samples(exp_nor, cc == "low")
+physeq = phyloseq::subset_samples(physeq, DPH == 12)
+ordination_bray = phyloseq::ordinate(physeq = physeq, method = "PCoA", distance = "bray") 
+plot_bray_low = phyloseq::plot_ordination(physeq = physeq, ordination = ordination_bray, 
+                                      title = "Bray-Curtis",  axes = c(1,2), justDF = T)
+
+evals1_lo <- round(ordination_bray$values$Eigenvalues[1] / sum(ordination_bray$values$Eigenvalues) * 100, 1)
+evals2_lo <- round(ordination_bray$values$Eigenvalues[2] / sum(ordination_bray$values$Eigenvalues) * 100, 1)
+
+plot_bray_low %>% 
+  ggplot2::ggplot(aes(x=Axis.1, y = Axis.2, fill = Overall_system, shape = as.character(DPH) ) ) + 
+  geom_hline(yintercept = 0, color = "grey60") + 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  xlab(paste("PCoA 1 (", evals1_lo, "%)", sep = "")) +
+  ylab(paste("PCoA 2 (", evals2_lo, "%)", sep = "")) + 
+  my.theme + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill_low) +
+  scale_color_manual("Rearing treatment",values = system_overall_fill_low) +
+  scale_shape_manual("DPH",values = system_shape_day) + 
+  guides(fill = guide_legend(override.aes = list(shape = 21)) ) + 
+  coord_fixed(ratio = evals2_lo/evals1_lo) + 
+  geom_point(size = 3)  
+
+#ggsave(bcplot_d12, filename = paste0(filepath_figures, "PCoA_all-samples-bc_day12.svg"), width = 180, height = 100, units = "mm")
+```

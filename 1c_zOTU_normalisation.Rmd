@@ -1,0 +1,430 @@
+---
+title: "zOTU normalisation"
+---
+
+```{r}
+library(phyloseq)
+library(vegan)
+library(dplyr)
+library(genefilter) #BiocManager::install("genefilter")
+library(microbiome) # BiocManager::install("microbiome")
+library(ggplot2)
+library(scales)
+library(ggpubr) # BiocManager::install("ggpubr")
+library(grid)
+library(ranacapa) #remotes::install_github("gauravsk/ranacapa")
+set.seed(0201)
+sessionInfo()
+```
+
+```{r}
+filepath = "~/Library/CloudStorage/OneDrive-NTNU/Doktorgrad/Ferdige prosjekter/Project 3 MMS_FTS_r_K_experiment/MMS-FTS Overview results and manuscript plan/R_Analysis_MMS-FTS"
+filepath_results =paste0( filepath, "/results/", Sys.Date(), "_")
+
+filepath_figures = paste0(filepath, "/figures/" , Sys.Date(), "_")
+full_experiment = readRDS(file = paste0(filepath,"/data/zOTUs/2022-01-11_zOTU_raw_dataset.rds") ) 
+source(paste0(filepath, "/revised_figures_scripts/plot.settings.R"))
+```
+
+#Dataset investigation
+```{r}
+#full_experiment
+#first calculate the maximum sequence depth to test. This is done here by finding the maximum sequence depth #observed in the dataset 
+max_depth_to_test = max(phyloseq::sample_sums(full_experiment))
+
+dataset_overview = data.frame(total_reads = sum(phyloseq::sample_sums(full_experiment)), 
+           max_read = max(phyloseq::sample_sums(full_experiment)), 
+           min_read = min(phyloseq::sample_sums(full_experiment)),
+           average_depth = mean(phyloseq::sample_sums(full_experiment)), 
+           sd_depth = sd(phyloseq::sample_sums(full_experiment)) )
+```
+
+```{r}
+#Plot overview of sampling depth in each sample
+df = data.frame(Sample = names(sample_sums(full_experiment)), depth =sample_sums(full_experiment))
+
+ggplot(data = df, aes(x = Sample, y = depth)) + 
+  geom_bar(stat = "identity") + 
+  my.theme + 
+  coord_cartesian(expand = FALSE)
+
+ggsave(filename = paste0(filepath_figures,  "_sequencing_depth_each_sample.png"), 
+       width = 250, height = 80, units = "mm")
+```
+
+```{r}
+#plot rarefraction curves to see differences in sequencing depth
+p = ranacapa::ggrare(physeq = full_experiment, step = 500,  se = FALSE) 
+p + 
+  my.theme +
+  facet_wrap(~Overall_system+DPH, ncol = 3) + 
+  ylab("ASV richness") + 
+  xlab("Sequencing depth") + 
+  theme(text = element_text(size = 14))
+
+ggsave(filename = paste0(filepath_figures ,"rarefaction_curves.svg"), 
+       width = 180, height =150, units = "mm")
+```
+
+```{r}
+#average rareslope
+all_rareslopes = data.frame(sample = full_experiment@sam_data@row.names, 
+                            slope = vector(mode = "integer", 
+                                           length = nrow(full_experiment@sam_data)))
+for (i in 1:nrow(full_experiment@sam_data)) {
+  sample = subset_samples(full_experiment,
+                          Sample == full_experiment@sam_data@row.names[i] )
+  sample_rareslope = rareslope(t(otu_table(sample)), sample = sample_sums(sample)-1)
+  all_rareslopes[i,2] = sample_rareslope
+  }
+
+all_rareslopes$new_detection_every_n_read = 1/all_rareslopes$slope
+
+all_rareslopes %>% summarise(avg_sl = mean(slope))
+```
+
+
+#Normalisation
+## Scale dataset 
+```{r}
+# scaled data set
+#ntaxa(full_experiment) #1316 ASVs in the dataset
+flist = filterfun(kOverA(0.1,1)) #taxa must have at least 1 read in at least 1 sample
+ntaxa(filter_taxa(full_experiment, flist, prune = TRUE)) #1316 ASVs - confirms that all taxa are observed
+sd(sample_sums(full_experiment))/mean(sample_sums(full_experiment)) #cv = 0.4559979
+#Scale to lowest sampling depth 
+composistional = microbiome::transform(full_experiment, transform = "compositional")
+scale = microbiome::transform(composistional, transform = "scale", scale = min(sample_sums(full_experiment))) #3711 is the lowest sampling depth 
+ntaxa(scale) #1316 taxa 
+sd(round(sample_sums(scale), -1))/mean(sample_sums(scale)) #cv = 0
+
+head(scale@otu_table)[1:6,1:6]
+```
+
+## Round
+```{r}
+#Round the scaled data set
+scale_round = scale
+otu_table(scale_round) = round(otu_table(scale_round), 0)
+scale_round = filter_taxa(scale_round, flist, prune = TRUE) #2017 taxa left
+sd(sample_sums(scale_round))/mean(sample_sums(scale_round)) #cv = 0.008206166
+ntaxa(full_experiment)-ntaxa(scale_round) #289 ASVs removed
+
+#saveRDS(object = scale_round,
+#        file = paste0(filepath_results, "zOTU_dataset_scaled_rounded.RDS") )
+
+scale_round = readRDS(file = paste0(filepath,
+                                    "/results/2022-01-11_zOTU_dataset_scaled_rounded.RDS"))
+
+head(scale_round@otu_table)[1:6,1:7]
+
+dataset_overview_round = data.frame(total_reads = sum(phyloseq::sample_sums(scale_round)), 
+           max_read = max(phyloseq::sample_sums(scale_round)), 
+           min_read = min(phyloseq::sample_sums(scale_round)),
+           average_depth = mean(phyloseq::sample_sums(scale_round)), 
+           sd_depth = sd(phyloseq::sample_sums(scale_round))) 
+```
+
+## rarify
+```{r}
+#Rarefy scaled data set
+
+scale@otu_table[1:6,1:6]
+sample_sums(scale)[1:6]
+
+scale_rarefy = rarefy_even_depth(physeq = scale, sample.size = min(sample_sums(scale)), rngseed = 123, trimOTUs = TRUE) 
+sd(sample_sums(scale_rarefy))/mean(sample_sums(scale_rarefy)) #cv = 0
+ntaxa(full_experiment)-ntaxa(scale_rarefy) #25 ASVs removed
+
+#saveRDS(object = scale_rarefy, 
+#        file = paste0(filepath_results, "zOTU_dataset_scaled_rarified.RDS") )
+
+scale_rarefy = readRDS(file = paste0(filepath,
+                                    "/results/2022-01-11_zOTU_dataset_scaled_rarified.RDS"))
+
+head(scale_rarefy@otu_table)[1:6,1:7]
+dataset_overview_rar = data.frame(total_reads = sum(phyloseq::sample_sums(scale_rarefy)), 
+           max_read = max(phyloseq::sample_sums(scale_rarefy)), 
+           min_read = min(phyloseq::sample_sums(scale_rarefy)),
+           average_depth = mean(phyloseq::sample_sums(scale_rarefy)), 
+           sd_depth = sd(phyloseq::sample_sums(scale_rarefy))) 
+```
+
+
+#Effect of normalisation on alpha diversity
+```{r}
+full_experiment = readRDS(file = paste0(filepath,"/data/zOTUs/2022-01-11_zOTU_raw_dataset.rds") ) 
+# calculate alpha diversity of order 0-2 for the full data set
+OTU_table_full = as.data.frame(full_experiment@otu_table)
+transposed_OTU_table_full = t(OTU_table_full) 
+hillnumbers_full = vegan::renyi(transposed_OTU_table_full, scales = c(0,1,2,Inf), hill = TRUE) #calculates diversity of different orders for the data set 
+colnames(hillnumbers_full) =  c("Order0", "Order1", "Order2", "OrderInf")
+#add the hill numbers to the environmental variables for easy plotting. 
+sample_data(full_experiment) <- base::cbind(sample_data(full_experiment), hillnumbers_full) #add the hill numbers to the environmental variables
+
+df_full = data.frame(full_experiment@sam_data)
+df_full$samplename = rownames(df_full)
+```
+
+
+```{r}
+# calculate alpha diversity of order 0-2 for the scaled+rounded
+OTU_table_round = as.data.frame(scale_round@otu_table)
+transposed_OTU_table_round = t(OTU_table_round) 
+hillnumbers_round = vegan::renyi(transposed_OTU_table_round, scales = c(0,1,2,Inf), hill = TRUE) #calculates diversity of different orders for the data set 
+colnames(hillnumbers_round) =  c("Order0", "Order1", "Order2", "OrderInf")
+#add the hill numbers to the environmental variables for easy plotting. 
+sample_data(scale_round) <- base::cbind(sample_data(scale_round), hillnumbers_round) #add the hill numbers to the environmental variables
+
+df_round = data.frame(scale_round@sam_data)
+df_round$samplename = rownames(df_round)
+```
+
+
+```{r}
+# calculate alpha diversity of order 0-2 for the scaled+rarefied
+OTU_table_rarefied = as.data.frame(scale_rarefy@otu_table)
+transposed_OTU_table_rarefied = t(OTU_table_rarefied) 
+hillnumbers_rarefied = vegan::renyi(transposed_OTU_table_rarefied, scales = c(0,1,2,Inf), hill = TRUE) #calculates diversity of different orders for the data set 
+colnames(hillnumbers_rarefied) =  c("Order0", "Order1", "Order2", "OrderInf")
+#add the hill numbers to the environmental variables for easy plotting. 
+sample_data(scale_rarefy) <- base::cbind(sample_data(scale_rarefy), hillnumbers_rarefied) #add the hill numbers to the environmental variables
+
+df_rarefied = data.frame(scale_rarefy@sam_data)
+df_rarefied$samplename = rownames(df_rarefied)
+```
+
+
+```{r}
+#melt each data frame
+df_full.2 = reshape2::melt(df_full, id.vars = colnames(df_full)[c(1:12,17:17)])
+colnames(df_full.2)[14:15] = c("Order", "Diversity_full")
+df_round = select(df_round, -label_name)
+df_round.2 = reshape2::melt(df_round, id.vars = colnames(df_round)[c(1:12,17:17)])
+colnames(df_round.2)[14:15] = c("Order", "Diversity_round")
+
+df_rarefied = select(df_rarefied, -label_name)
+df_rarefied.2 = reshape2::melt(df_rarefied, id.vars = colnames(df_rarefied)[c(1:12,17:17)])
+colnames(df_rarefied.2)[14:15] = c("Order", "Diversity_rarefied")
+#bind data frames together
+all_dataset = merge(df_full.2, df_round.2)
+all_dataset = merge(all_dataset, df_rarefied.2)
+
+write.csv(x = all_dataset, file = paste0(filepath_results, "alpha-diversity-hill123inf-full-and-normalised.csv") )
+```
+
+## Correlation datasets
+Full vs rounded
+```{r}
+all_dataset =read.csv(file = paste0(filepath,
+                                    "/results/2022-01-11_alpha-diversity-hill123inf-full-and-normalised.csv") )
+
+all_dataset %>% filter(Order != "OrderInf", Order != "Order2") %>%
+  ggplot2::ggplot(aes(x = Diversity_full, y = Diversity_round)) + 
+  my.theme + 
+  facet_wrap(~Order, scales = "free" ) +
+  geom_point(size = 2.5, aes(color = Overall_system, fill = Overall_system, shape = Overall_system)) + 
+  geom_point(color = "black", fill = NA, size = 3, aes(shape = Overall_system)) + 
+  geom_abline(slope = 1, linetype = "dotted") +   
+  ggpubr::stat_regline_equation(label.y.npc = 1) + 
+  ggpubr::stat_cor(method = "pearson", label.y.npc = 0.9, 
+                   aes(label = paste(..rr.label..)))  + 
+  
+  
+  
+  scale_color_manual("Overall_system",  values = system_overall_fill) + 
+  scale_fill_manual("Overall_system",values = system_overall_fill) + 
+  scale_shape_manual("Overall_system",values = system_overall_shape_21) +  
+  facet_wrap(~Order, scales = "free" ) +
+  geom_point(size = 2.5, aes(color = Overall_system, fill = Overall_system, shape = Overall_system)) + 
+  geom_point(color = "black", fill = NA, size = 3, aes(shape = Overall_system)) + 
+  geom_abline(slope = 1, linetype = "dotted") +   
+  ggpubr::stat_regline_equation(label.y.npc = 1) + 
+  ggpubr::stat_cor(method = "pearson", label.y.npc = 0.9, 
+                   aes(label = paste(..rr.label..)))  + 
+  labs(title = "Scaled to lowest sampling depth, then rounded",
+              subtitle = "289 ASVs lost in total, sampling depth = 3666±30 (mean+sd)") + 
+  coord_cartesian(expand = TRUE)
+
+ggsave(filename = paste0(filepath_figures, "alpha-hill-correlation_full-vs-rounded.png"), 
+       width = 180, height = 80, units = "mm")
+```
+
+Full vs rarified
+```{r}
+all_dataset =read.csv(file = paste0(filepath,                                    "/results/2022-01-11_alpha-diversity-hill123inf-full-and-normalised.csv") )
+
+all_dataset %>% filter(Order != "OrderInf", Order != "Order2") %>%
+  ggplot2::ggplot(aes(x = Diversity_full, y = Diversity_rarefied)) + 
+  my.theme + 
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  #scale_shape_manual("Rearing treatment",values = system_overall_shape_21) +  
+  
+  facet_wrap(~Order, scales = "free" ) +
+  
+  geom_point(size = 3, shape = 21, color = "black", aes(fill = Overall_system)) +  
+  
+  geom_abline(slope = 1, linetype = "dotted") +   
+  ggpubr::stat_regline_equation(label.y.npc = 0.2, label.x.npc = 0.35, size = 3) + 
+  ggpubr::stat_cor(method = "pearson", label.y.npc = 0.1, label.x.npc = 0.35,size = 3,  
+                   aes(label = paste(..rr.label..)))  + 
+  
+  #labs(title = "Scaled to lowest sampling depth, then rarefied",
+  #            subtitle = "25 ASVs lost in total, sampling depth = 3711±0 (mean+sd)") + 
+  coord_cartesian(expand = TRUE) + 
+  xlab("Diversity full") + 
+  ylab("Diversity rarified")
+
+
+ggsave(filename = paste0(filepath_figures, "alpha-hill-correlation_full-vs-rarified_01.svg"), 
+       width = 180, height = 80, units = "mm")
+
+```
+
+Chosen normalisation is the rounded then rarified
+
+# Procluster analysis
+
+## Weigted unifrac
+```{r}
+full_experiment = readRDS(file = paste0(filepath,
+                                        "/data/zOTUs/2022-01-11_zOTU_raw_dataset.rds") ) 
+scale_rarefy = readRDS(file = paste0(filepath,
+                                        "/results/2022-01-11_zOTU_dataset_scaled_rarified.rds") ) 
+
+full_experiment_wunifrac = phyloseq::distance(full_experiment, method = "wunifrac") 
+
+scale_rarefy_wunifrac = phyloseq::distance(scale_rarefy, method = "wunifrac") 
+
+procrustes.test_wu =  procrustes(X = full_experiment_wunifrac,Y =  scale_rarefy_wunifrac, 
+                                 symmetric = TRUE)
+
+procrustes.df_wu <- data.frame(ax.1=procrustes.test_wu$Yrot[,1],
+                               ax.2=procrustes.test_wu$Yrot[,2],
+                               xax.1=procrustes.test_wu$X[,1],
+                               xax.2=procrustes.test_wu$X[,2]) 
+procrustes.df_wu$Sample = rownames(procrustes.df_wu)
+procrustes.df_wu = merge(procrustes.df_wu, data.frame(sample_data(full_experiment)) ) 
+
+wu_pro = procrustes.df_wu %>%    
+  ggplot()+ 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  geom_hline(yintercept = 0, color = "grey60") + 
+  
+  geom_point(aes(x=ax.1, y=ax.2, shape = Overall_system, fill = Overall_system), size = 3, color = "black") +
+  
+  geom_segment(aes(x=ax.1,y=ax.2,xend=xax.1,yend=xax.2),arrow=arrow(length=unit(0.2,"cm")), color = "grey30") + 
+  
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Rearing treatment",values = system_overall_shape_2123) + 
+  my.theme + 
+  ylab("Axis 2") + 
+  xlab("Axis 1") + 
+  labs(title = "Weigted UniFrac",
+       subtitle = paste0("PSS = ", round(procrustes.test_wu$ss, 4) ))+ 
+  theme(text = element_text(size = 12))
+```
+
+Unweighted UniFrac
+```{r}
+full_experiment_unifrac = phyloseq::distance(full_experiment, method = "unifrac") 
+scale_rarefy_unifrac = phyloseq::distance(scale_rarefy, method = "unifrac") 
+procrustes.test_u =  procrustes(full_experiment_unifrac, scale_rarefy_unifrac, symmetric = TRUE)
+procrustes.df_u <- data.frame(ax.1=procrustes.test_u$Yrot[,1],
+                               ax.2=procrustes.test_u$Yrot[,2],
+                               xax.1=procrustes.test_u$X[,1],
+                               xax.2=procrustes.test_u$X[,2]) 
+procrustes.df_u$Sample = rownames(procrustes.df_u)
+procrustes.df_u = merge(procrustes.df_u, data.frame(sample_data(full_experiment)) ) 
+
+u_pro = procrustes.df_u %>%   
+  ggplot()+ 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  geom_hline(yintercept = 0, color = "grey60") + 
+  
+  geom_point(aes(x=ax.1, y=ax.2, shape = Overall_system, fill = Overall_system), size = 3, color = "black") +
+  
+  geom_segment(aes(x=ax.1,y=ax.2,xend=xax.1,yend=xax.2),arrow=arrow(length=unit(0.2,"cm")), color = "grey30") + 
+  
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Rearing treatment",values = system_overall_shape_2123) + 
+  my.theme + 
+  ylab("Axis 2") + 
+  xlab("Axis 1") + 
+  labs(title = "Unweighted UniFrac",
+       subtitle = paste0("PSS = ", round(procrustes.test_u$ss, 4) )) + 
+  theme(text = element_text(size = 12))
+```
+
+Bray Curtis
+```{r}
+full_experiment_bray = vegan::vegdist(x = t(as.data.frame(full_experiment@otu_table)), method = "bray", 
+                                      binary = FALSE)
+scale_rarefy_bray =vegan::vegdist(x = t(as.data.frame(scale_rarefy@otu_table)), method = "bray", 
+                                  binary = FALSE)
+procrustes.test_bray =  procrustes(full_experiment_bray, scale_rarefy_bray, symmetric = TRUE)
+procrustes.df_bray <- data.frame(ax.1=procrustes.test_bray$Yrot[,1],
+                               ax.2=procrustes.test_bray$Yrot[,2],
+                               xax.1=procrustes.test_bray$X[,1],
+                               xax.2=procrustes.test_bray$X[,2]) 
+procrustes.df_bray$Sample = rownames(procrustes.df_bray)
+procrustes.df_bray = merge(procrustes.df_bray, data.frame(sample_data(full_experiment)) ) 
+
+bray_pro = procrustes.df_bray %>%   
+  ggplot()+ 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  geom_hline(yintercept = 0, color = "grey60") + 
+  
+  geom_point(aes(x=ax.1, y=ax.2, shape = Overall_system, fill = Overall_system), size = 3, color = "black") +
+  
+  geom_segment(aes(x=ax.1,y=ax.2,xend=xax.1,yend=xax.2),arrow=arrow(length=unit(0.2,"cm")), color = "grey30") + 
+  
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Rearing treatment",values = system_overall_shape_2123) + 
+  my.theme + 
+  ylab("Axis 2") + 
+  xlab("Axis 1") + 
+  labs(title = "Bray Curtis",
+       subtitle = paste0("PSS = ", round(procrustes.test_bray$ss, 4) ))+ 
+  theme(text = element_text(size = 12))
+```
+
+Sørensen
+```{r}
+full_experiment_sor = vegan::vegdist(x = t(as.data.frame(full_experiment@otu_table)), 
+                                     method = "bray", binary = TRUE ) 
+scale_rarefy_sor = vegan::vegdist(x = t(as.data.frame(scale_rarefy@otu_table)), 
+                                  method = "bray", binary = TRUE ) 
+procrustes.test_sor =  procrustes(full_experiment_sor, scale_rarefy_sor, symmetric = TRUE)
+procrustes.df_sor <- data.frame(ax.1=procrustes.test_sor$Yrot[,1],
+                               ax.2=procrustes.test_sor$Yrot[,2],
+                               xax.1=procrustes.test_sor$X[,1],
+                               xax.2=procrustes.test_sor$X[,2]) 
+procrustes.df_sor$Sample = rownames(procrustes.df_sor)
+procrustes.df_sor = merge(procrustes.df_sor, data.frame(sample_data(full_experiment)) ) 
+
+sor_pro = procrustes.df_sor %>%  
+  ggplot()+ 
+  geom_vline(xintercept = 0, color = "grey60") + 
+  geom_hline(yintercept = 0, color = "grey60") + 
+  
+  geom_point(aes(x=ax.1, y=ax.2, shape = Overall_system, fill = Overall_system), size = 3, color = "black") +
+  
+  geom_segment(aes(x=ax.1,y=ax.2,xend=xax.1,yend=xax.2),arrow=arrow(length=unit(0.2,"cm")), color = "grey30") + 
+  
+  scale_fill_manual("Rearing treatment",values = system_overall_fill) + 
+  scale_shape_manual("Rearing treatment",values = system_overall_shape_2123) + 
+  my.theme + 
+  ylab("Axis 2") + 
+  xlab("Axis 1") + 
+  labs(title = "Sørensen",
+       subtitle = paste0("PSS = ", round(procrustes.test_sor$ss, 4) )) + 
+  theme(text = element_text(size = 12))
+```
+
+```{r}
+ggarrange(wu_pro, u_pro, bray_pro, sor_pro, ncol = 2, nrow = 2, common.legend = TRUE, legend = "right", labels = c("a)", "b)", "c)", "d)") )
+
+ggsave(filename = paste0(filepath_figures,  "procruster-analysis_full-vs-rarified.svg"), 
+       width = 180, units = "mm", height = 140)
+```
